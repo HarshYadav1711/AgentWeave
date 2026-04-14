@@ -14,7 +14,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.database import get_db, init_db
@@ -39,6 +39,12 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="AgentWeave", lifespan=lifespan)
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    """OpenAPI UI is at /docs; root redirects so the base URL is not a 404."""
+    return RedirectResponse(url="/docs")
 
 
 def _success(data):
