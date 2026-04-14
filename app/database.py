@@ -9,10 +9,6 @@ from pathlib import Path
 _DB_PATH = Path(__file__).resolve().parent.parent / "agentweave.db"
 
 
-def db_path() -> Path:
-    return _DB_PATH
-
-
 def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row

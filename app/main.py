@@ -44,7 +44,7 @@ app = FastAPI(title="AgentWeave", lifespan=lifespan)
 @app.exception_handler(RequestValidationError)
 async def request_validation_handler(_request, exc: RequestValidationError):
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={
             "ok": False,
             "error": "validation_error",
@@ -166,7 +166,7 @@ def search_agents(
     term = q.strip()
     if not term:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "error": "invalid_query",
                 "message": "Query parameter 'q' must contain non-whitespace characters.",
