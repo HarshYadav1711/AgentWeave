@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Generator
 from pathlib import Path
 
 _DB_PATH = Path(__file__).resolve().parent.parent / "agentweave.db"
@@ -44,5 +45,13 @@ def init_db() -> None:
             """
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_db() -> Generator[sqlite3.Connection, None, None]:
+    conn = connect()
+    try:
+        yield conn
     finally:
         conn.close()

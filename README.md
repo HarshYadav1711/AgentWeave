@@ -39,3 +39,15 @@ The SQLite file `agentweave.db` is created on startup next to the project root.
 **agents:** `id`, `name` (UNIQUE), `description`, `endpoint`, `tags` (JSON text)
 
 **usage_events:** `id`, `caller`, `target`, `units`, `request_id` (UNIQUE), `created_at` (default `datetime('now')`)
+
+## API
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `POST` | `/agents` | Create agent; validates `name`, `description`, `endpoint` (and optional `tags`) |
+| `GET` | `/agents` | List all agents |
+| `GET` | `/search` | `q` query; case-insensitive match on **name** or **description** |
+| `POST` | `/usage` | Log usage; `caller` / `target` must match existing agent names (case-insensitive); idempotent on `request_id` |
+| `GET` | `/usage-summary` | `total_units` per `target`, sorted by `target` |
+
+Duplicate `request_id` with the same payload returns `status: "ignored"` and does not double-count. Conflicting reuse of `request_id` returns `409`.
