@@ -7,6 +7,18 @@ Each test is named for interview walkthroughs: what it proves is obvious from th
 from __future__ import annotations
 
 
+def _data(resp):
+    body = resp.json()
+    assert body["status"] == "success"
+    return body["data"]
+
+
+def _error(resp):
+    body = resp.json()
+    assert body["status"] == "error"
+    return body["error"]
+
+
 def test_add_agent_success(client):
     r = client.post(
         "/agents",
@@ -18,8 +30,7 @@ def test_add_agent_success(client):
         },
     )
     assert r.status_code == 201
-    body = r.json()
-    assert body.get("ok") is True
+    body = _data(r)
     assert body["name"] == "Alpha"
     assert "demo" in body["tags"]
 
@@ -35,7 +46,7 @@ def test_search_by_keyword_in_name(client):
     )
     r = client.get("/search", params={"q": "token"})
     assert r.status_code == 200
-    names = [a["name"] for a in r.json()]
+    names = [a["name"] for a in _data(r)]
     assert "SearchableNameToken" in names
 
 
@@ -50,7 +61,7 @@ def test_search_by_keyword_in_description(client):
     )
     r = client.get("/search", params={"q": "galaxy"})
     assert r.status_code == 200
-    names = [a["name"] for a in r.json()]
+    names = [a["name"] for a in _data(r)]
     assert "Beta" in names
 
 
@@ -73,8 +84,7 @@ def test_log_usage_success(client):
         },
     )
     assert r.status_code == 200
-    j = r.json()
-    assert j.get("ok") is True
+    j = _data(r)
     assert j["status"] == "recorded"
     assert j["units"] == 3.0
 
@@ -96,16 +106,16 @@ def test_duplicate_request_id_ignored_and_totals_unchanged(client):
     }
     first = client.post("/usage", json=payload)
     assert first.status_code == 200
-    assert first.json()["status"] == "recorded"
+    assert _data(first)["status"] == "recorded"
 
     second = client.post("/usage", json=payload)
     assert second.status_code == 200
-    j = second.json()
+    j = _data(second)
     assert j["status"] == "ignored"
     assert j.get("ignored_duplicate_request") is True
     assert j["operation"] == "ignored_duplicate_request"
 
-    summary = client.get("/usage-summary").json()
+    summary = _data(client.get("/usage-summary"))
     rows = {row["target"]: row["total_units"] for row in summary["by_target"]}
     assert rows.get("B") == 5.0
 
@@ -125,8 +135,8 @@ def test_usage_unknown_caller_returns_error(client):
         },
     )
     assert r.status_code == 404
-    assert r.json().get("ok") is False
-    assert r.json()["error"] == "caller_not_found"
+    err = _error(r)
+    assert err["code"] == "caller_not_found"
 
 
 def test_usage_unknown_target_returns_error(client):
@@ -144,16 +154,15 @@ def test_usage_unknown_target_returns_error(client):
         },
     )
     assert r.status_code == 404
-    assert r.json().get("ok") is False
-    assert r.json()["error"] == "target_not_found"
+    err = _error(r)
+    assert err["code"] == "target_not_found"
 
 
 def test_missing_fields_validation_error(client):
     r = client.post("/usage", json={"caller": "X"})
     assert r.status_code == 422
-    body = r.json()
-    assert body.get("ok") is False
-    assert body["error"] == "validation_error"
+    err = _error(r)
+    assert err["code"] == "validation_error"
 
 
 def test_invalid_units_validation_error(client):
@@ -175,7 +184,7 @@ def test_invalid_units_validation_error(client):
         },
     )
     assert r.status_code == 422
-    assert r.json().get("ok") is False
+    assert _error(r)["code"] == "validation_error"
 
 
 def test_usage_summary_correct_totals(client):
@@ -221,8 +230,7 @@ def test_usage_summary_correct_totals(client):
 
     r = client.get("/usage-summary")
     assert r.status_code == 200
-    summary = r.json()
-    assert summary.get("ok") is True
+    summary = _data(r)
     rows = {row["target"]: row["total_units"] for row in summary["by_target"]}
     assert rows["Y"] == 5.0
     assert rows["Z"] == 1.0

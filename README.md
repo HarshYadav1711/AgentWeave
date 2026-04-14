@@ -88,9 +88,11 @@ curl -s "http://127.0.0.1:8000/usage-summary"
 
 **Responses**
 
-- Successful JSON bodies use **`ok: true`** on the main models (see OpenAPI).
-- **`POST /usage`** returns either **`status: "recorded"`** or **`status: "ignored"`** with **`operation: "ignored_duplicate_request"`** when the same `request_id` repeats with the same payload.
-- **Errors** return **`ok: false`** with **`error`** and **`message`** (and optional **`details`**) for validation failures.
+- Success envelope:
+  - `{ "status": "success", "data": ... }`
+- Error envelope:
+  - `{ "status": "error", "error": { "code": "...", "message": "...", ... } }`
+- **`POST /usage`** keeps idempotency explicit: duplicate `request_id` with the same payload returns success with `data.status: "ignored"` and `data.operation: "ignored_duplicate_request"` (totals do not increase).
 
 **Tags**
 

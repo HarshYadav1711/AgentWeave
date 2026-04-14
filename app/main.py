@@ -41,15 +41,21 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="AgentWeave", lifespan=lifespan)
 
 
+def _success(data):
+    return {"status": "success", "data": data}
+
+
 @app.exception_handler(RequestValidationError)
 async def request_validation_handler(_request, exc: RequestValidationError):
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={
-            "ok": False,
-            "error": "validation_error",
-            "message": "Request body or query parameters failed validation.",
-            "details": exc.errors(),
+            "status": "error",
+            "error": {
+                "code": "validation_error",
+                "message": "Request body or query parameters failed validation.",
+                "details": exc.errors(),
+            },
         },
     )
 
@@ -57,16 +63,25 @@ async def request_validation_handler(_request, exc: RequestValidationError):
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(_request, exc: StarletteHTTPException):
     """Return application errors as a flat JSON object (no ``detail`` wrapper)."""
-    payload: dict
+    error_payload: dict
     if isinstance(exc.detail, dict):
-        payload = {"ok": False, **exc.detail}
+        error_payload = {
+            "code": str(exc.detail.get("error", "http_error")),
+            "message": str(exc.detail.get("message", "Request failed.")),
+        }
+        if "existing" in exc.detail:
+            error_payload["existing"] = exc.detail["existing"]
+        if "details" in exc.detail:
+            error_payload["details"] = exc.detail["details"]
     else:
-        payload = {
-            "ok": False,
-            "error": "http_error",
+        error_payload = {
+            "code": "http_error",
             "message": str(exc.detail),
         }
-    return JSONResponse(status_code=exc.status_code, content=payload)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"status": "error", "error": error_payload},
+    )
 
 
 def _agent_row_to_out(row: sqlite3.Row) -> AgentOut:
@@ -96,7 +111,7 @@ def _resolve_agent_name(conn: sqlite3.Connection, name: str) -> str | None:
     return str(row["name"]) if row else None
 
 
-@app.post("/agents", response_model=AgentOut, status_code=status.HTTP_201_CREATED)
+@app.post("/agents", status_code=status.HTTP_201_CREATED)
 def create_agent(body: AgentCreate, conn: Db):
     extracted = extract_keywords_from_description(body.description)
     merged = merge_manual_and_extracted_tags(body.tags, extracted)
@@ -141,10 +156,10 @@ def create_agent(body: AgentCreate, conn: Db):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "database_error", "message": "Agent was created but could not be read back."},
         )
-    return _agent_row_to_out(row)
+    return _success(_agent_row_to_out(row).model_dump())
 
 
-@app.get("/agents", response_model=list[AgentOut])
+@app.get("/agents")
 def list_agents(conn: Db):
     try:
         rows = conn.execute(
@@ -155,10 +170,10 @@ def list_agents(conn: Db):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "database_error", "message": str(e)},
         ) from e
-    return [_agent_row_to_out(r) for r in rows]
+    return _success([_agent_row_to_out(r).model_dump() for r in rows])
 
 
-@app.get("/search", response_model=list[AgentOut])
+@app.get("/search")
 def search_agents(
     conn: Db,
     q: str = Query(..., min_length=1, description="Search text (name or description)"),
@@ -187,12 +202,11 @@ def search_agents(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "database_error", "message": str(e)},
         ) from e
-    return [_agent_row_to_out(r) for r in rows]
+    return _success([_agent_row_to_out(r).model_dump() for r in rows])
 
 
 @app.post(
     "/usage",
-    response_model=UsageRecorded | UsageIgnored,
     status_code=status.HTTP_200_OK,
 )
 def log_usage(body: UsageCreate, conn: Db):
@@ -250,12 +264,14 @@ def log_usage(body: UsageCreate, conn: Db):
             abs_tol=1e-9,
         )
         if same_caller and same_target and same_units:
-            return UsageIgnored(
+            return _success(
+                UsageIgnored(
                 request_id=body.request_id,
                 message=(
                     "Duplicate request_id: usage was already recorded; "
                     "this request was ignored and did not increase totals."
                 ),
+                ).model_dump()
             )
 
         raise HTTPException(
@@ -290,15 +306,17 @@ def log_usage(body: UsageCreate, conn: Db):
             detail={"error": "database_error", "message": "Usage was logged but could not be read back."},
         )
 
-    return UsageRecorded(
-        request_id=body.request_id,
-        caller=str(row["caller"]),
-        target=str(row["target"]),
-        units=float(row["units"]),
+    return _success(
+        UsageRecorded(
+            request_id=body.request_id,
+            caller=str(row["caller"]),
+            target=str(row["target"]),
+            units=float(row["units"]),
+        ).model_dump()
     )
 
 
-@app.get("/usage-summary", response_model=UsageSummaryOut)
+@app.get("/usage-summary")
 def usage_summary(conn: Db):
     try:
         rows = conn.execute(
@@ -319,4 +337,4 @@ def usage_summary(conn: Db):
         UsageSummaryRow(target=str(r["target"]), total_units=float(r["total_units"]))
         for r in rows
     ]
-    return UsageSummaryOut(by_target=out_rows)
+    return _success(UsageSummaryOut(by_target=out_rows).model_dump())
