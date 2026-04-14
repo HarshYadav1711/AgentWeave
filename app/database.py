@@ -1,4 +1,4 @@
-"""SQLite connection and schema (stdlib sqlite3 only)."""
+"""SQLite file database: connection helper, schema creation, and request-scoped sessions."""
 
 from __future__ import annotations
 

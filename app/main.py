@@ -1,4 +1,8 @@
-"""FastAPI entrypoint and HTTP routes."""
+"""
+HTTP API for AgentWeave: agent registration, search, usage logging with idempotent
+request IDs, and aggregated usage by target. Intended as a small, readable demo
+for an internship assessment (see package docstring in ``app.__init__``).
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.database import get_db, init_db
 from app.models import (
@@ -22,6 +27,7 @@ from app.models import (
     UsageSummaryOut,
     UsageSummaryRow,
 )
+from app.utils import extract_keywords_from_description, merge_manual_and_extracted_tags
 
 Db = Annotated[sqlite3.Connection, Depends(get_db)]
 
@@ -40,11 +46,27 @@ async def request_validation_handler(_request, exc: RequestValidationError):
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
+            "ok": False,
             "error": "validation_error",
             "message": "Request body or query parameters failed validation.",
             "details": exc.errors(),
         },
     )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(_request, exc: StarletteHTTPException):
+    """Return application errors as a flat JSON object (no ``detail`` wrapper)."""
+    payload: dict
+    if isinstance(exc.detail, dict):
+        payload = {"ok": False, **exc.detail}
+    else:
+        payload = {
+            "ok": False,
+            "error": "http_error",
+            "message": str(exc.detail),
+        }
+    return JSONResponse(status_code=exc.status_code, content=payload)
 
 
 def _agent_row_to_out(row: sqlite3.Row) -> AgentOut:
@@ -54,12 +76,15 @@ def _agent_row_to_out(row: sqlite3.Row) -> AgentOut:
         tags = [str(x) for x in parsed] if isinstance(parsed, list) else []
     except json.JSONDecodeError:
         tags = []
+    desc = str(row["description"])
+    extracted = extract_keywords_from_description(desc)
     return AgentOut(
         id=int(row["id"]),
         name=row["name"],
-        description=row["description"],
+        description=desc,
         endpoint=row["endpoint"],
         tags=tags,
+        tags_from_description=extracted,
     )
 
 
@@ -73,7 +98,9 @@ def _resolve_agent_name(conn: sqlite3.Connection, name: str) -> str | None:
 
 @app.post("/agents", response_model=AgentOut, status_code=status.HTTP_201_CREATED)
 def create_agent(body: AgentCreate, conn: Db):
-    tags_json = json.dumps(body.tags)
+    extracted = extract_keywords_from_description(body.description)
+    merged = merge_manual_and_extracted_tags(body.tags, extracted)
+    tags_json = json.dumps(merged)
     try:
         cur = conn.execute(
             """
@@ -223,7 +250,13 @@ def log_usage(body: UsageCreate, conn: Db):
             abs_tol=1e-9,
         )
         if same_caller and same_target and same_units:
-            return UsageIgnored(request_id=body.request_id)
+            return UsageIgnored(
+                request_id=body.request_id,
+                message=(
+                    "Duplicate request_id: usage was already recorded; "
+                    "this request was ignored and did not increase totals."
+                ),
+            )
 
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -273,7 +306,7 @@ def usage_summary(conn: Db):
             SELECT target, SUM(units) AS total_units
             FROM usage_events
             GROUP BY target
-            ORDER BY target ASC
+            ORDER BY total_units DESC, target ASC
             """,
         ).fetchall()
     except sqlite3.Error as e:

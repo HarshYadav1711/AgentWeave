@@ -1,53 +1,109 @@
 # AgentWeave
 
-Minimal FastAPI scaffold using **Pydantic**, **sqlite3** (stdlib), and **Uvicorn**. No ORM, no external database.
+Local-only FastAPI service that registers **agents** (name, description, endpoint, tags) and records **usage** between them with **idempotent** `request_id` handling. Persistence is **SQLite** via the standard library (`sqlite3`); there is **no ORM** and no external database.
 
-## Setup
+## Problem understanding
 
-Python 3.10+ recommended.
+The core job is to **register agents**, let clients **search** them, **log usage** from a caller to a target with a **stable request id**, and **aggregate** usage per target—without ever **double-counting** when a client retries the same `request_id`. The API should **validate inputs**, return **predictable JSON**, and stay **small enough to review** in an interview setting.
+
+## How to run locally
+
+Python **3.10+** recommended.
 
 ```bash
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-## Run
-
-From the repository root:
-
-```bash
 uvicorn app.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs` for the interactive API.
+- API base: `http://127.0.0.1:8000`
+- OpenAPI UI: `http://127.0.0.1:8000/docs`
+- SQLite file (created on startup): `agentweave.db` in the project root
 
-The SQLite file `agentweave.db` is created on startup next to the project root.
+## Example requests
+
+Examples use `curl` against the default port; adjust the URL if needed.
+
+**Create an agent** (manual tags are merged with keywords extracted from `description`):
+
+```bash
+curl -s -X POST "http://127.0.0.1:8000/agents" -H "Content-Type: application/json" \
+  -d '{"name":"Router","description":"Routes traffic for NLP workloads","endpoint":"http://localhost:9000","tags":["prod"]}'
+```
+
+**List agents**
+
+```bash
+curl -s "http://127.0.0.1:8000/agents"
+```
+
+**Search (case-insensitive name or description)**
+
+```bash
+curl -s "http://127.0.0.1:8000/search?q=nlp"
+```
+
+**Log usage** (caller/target must match an existing agent name, case-insensitive)
+
+```bash
+curl -s -X POST "http://127.0.0.1:8000/usage" -H "Content-Type: application/json" \
+  -d '{"caller":"Router","target":"Router","units":2.5,"request_id":"req-2026-04-14-001"}'
+```
+
+**Retry the same `request_id`** (same payload → same `request_id` is **ignored**, no double-counting)
+
+```bash
+curl -s -X POST "http://127.0.0.1:8000/usage" -H "Content-Type: application/json" \
+  -d '{"caller":"Router","target":"Router","units":2.5,"request_id":"req-2026-04-14-001"}'
+```
+
+**Usage summary** (highest `total_units` first)
+
+```bash
+curl -s "http://127.0.0.1:8000/usage-summary"
+```
+
+## API overview
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/agents` | Create agent (`name`, `description`, `endpoint`, optional `tags`) |
+| `GET` | `/agents` | List all agents |
+| `GET` | `/search` | `q` query; case-insensitive match on **name** or **description** |
+| `POST` | `/usage` | Log usage; idempotent on `request_id` |
+| `GET` | `/usage-summary` | `total_units` per `target`, **descending by usage** (ties tie-break by `target`) |
+
+**Responses**
+
+- Successful JSON bodies use **`ok: true`** on the main models (see OpenAPI).
+- **`POST /usage`** returns either **`status: "recorded"`** or **`status: "ignored"`** with **`operation: "ignored_duplicate_request"`** when the same `request_id` repeats with the same payload.
+- **Errors** return **`ok: false`** with **`error`** and **`message`** (and optional **`details`**) for validation failures.
+
+**Tags**
+
+- Manual tags from the client are merged with **deterministic keyword extraction** from `description` (alphanumeric tokens, length ≥ 3, small fixed stopword list, first-seen order, capped). See `app/utils.py`.
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `app/main.py` | FastAPI app; calls `init_db()` on startup |
-| `app/database.py` | `sqlite3` connection + `init_db()` |
-| `app/models.py` | Pydantic models for `agents` / `usage_events` |
-| `app/utils.py` | Placeholder for shared helpers |
+| `app/main.py` | Routes, error shaping, startup |
+| `app/database.py` | `sqlite3` + `init_db()` |
+| `app/models.py` | Pydantic request/response models |
+| `app/utils.py` | Keyword extraction + tag merge |
 
-## Schema
+## Design answers
 
-**agents:** `id`, `name` (UNIQUE), `description`, `endpoint`, `tags` (JSON text)
+### 1) Billing without double charging
 
-**usage_events:** `id`, `caller`, `target`, `units`, `request_id` (UNIQUE), `created_at` (default `datetime('now')`)
+Treat each **`request_id` as an idempotency key** at the **database** layer: a **unique constraint** on `usage_events.request_id` guarantees at most one row per key. When a client retries with the same `request_id` and the same logical usage, the insert **fails once**, the handler **detects the duplicate**, and returns an **explicit ignored response** without inserting a second row—so **aggregates and totals never increase twice**. If the same `request_id` is reused with a **different** payload, the API returns **409** so ambiguous retries cannot silently corrupt billing.
 
-## API
+### 2) Scaling to 100K agents
 
-| Method | Path | Notes |
-|--------|------|--------|
-| `POST` | `/agents` | Create agent; validates `name`, `description`, `endpoint` (and optional `tags`) |
-| `GET` | `/agents` | List all agents |
-| `GET` | `/search` | `q` query; case-insensitive match on **name** or **description** |
-| `POST` | `/usage` | Log usage; `caller` / `target` must match existing agent names (case-insensitive); idempotent on `request_id` |
-| `GET` | `/usage-summary` | `total_units` per `target`, sorted by `target` |
+**100K agent rows** is still modest for SQLite with a **single writer**; the main levers are **indexes** and **read patterns**. I would add a **case-insensitive index** on `lower(name)` (or a `name_normalized` column) to speed lookups used by `/usage` resolution, keep **search** bounded (pagination or `LIMIT` if the product grows), and move to a **client/server database** (e.g. PostgreSQL) if **concurrent writes** or **multi-instance** deployment is required. The **API shape** (parameterized SQL, Pydantic validation, idempotent usage) stays the same; only the **connection and migration** story changes.
 
-Duplicate `request_id` with the same payload returns `status: "ignored"` and does not double-count. Conflicting reuse of `request_id` returns `409`.
+## AI reflection
+
+I used an AI assistant to **accelerate** implementation and to **pressure-check** edge cases (idempotency conflicts, float rounding, response consistency). I **reviewed** every path and kept the design **small** on purpose: **stdlib SQLite**, **no ORM**, **no extra services**, and **deterministic** tag extraction so the project is **easy to explain live**. The final choices are mine: **flat error JSON**, **explicit ignored operation** for duplicate `request_id`, and **summary sorted by highest usage** to make demos readable.

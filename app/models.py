@@ -41,11 +41,16 @@ class AgentCreate(BaseModel):
 
 
 class AgentOut(BaseModel):
+    ok: Literal[True] = True
     id: int
     name: str
     description: str
     endpoint: str
     tags: list[str]
+    tags_from_description: list[str] = Field(
+        default_factory=list,
+        description="Keywords extracted deterministically from description (same rules as stored merge).",
+    )
 
 
 class UsageCreate(BaseModel):
@@ -70,7 +75,9 @@ class UsageCreate(BaseModel):
 
 
 class UsageRecorded(BaseModel):
+    ok: Literal[True] = True
     status: Literal["recorded"] = "recorded"
+    operation: Literal["record_usage"] = "record_usage"
     request_id: str
     caller: str
     target: str
@@ -78,7 +85,10 @@ class UsageRecorded(BaseModel):
 
 
 class UsageIgnored(BaseModel):
+    ok: Literal[True] = True
     status: Literal["ignored"] = "ignored"
+    operation: Literal["ignored_duplicate_request"] = "ignored_duplicate_request"
+    ignored_duplicate_request: Literal[True] = True
     request_id: str
     reason: Literal["duplicate_request_id"] = "duplicate_request_id"
     message: str = (
@@ -92,4 +102,5 @@ class UsageSummaryRow(BaseModel):
 
 
 class UsageSummaryOut(BaseModel):
+    ok: Literal[True] = True
     by_target: list[UsageSummaryRow]
