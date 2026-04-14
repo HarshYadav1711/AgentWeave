@@ -22,6 +22,17 @@ uvicorn app.main:app --reload
 - OpenAPI UI: `http://127.0.0.1:8000/docs`
 - SQLite file (created on startup): `agentweave.db` in the project root
 
+## Testing (optional, local)
+
+**Automated (pytest):** installs dev deps and runs a small demo suite (isolated temp DB per run).
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+**Manual (curl):** step-by-step copy-paste flow — see [`MANUAL_TESTS.md`](MANUAL_TESTS.md).
+
 ## Example requests
 
 Examples use `curl` against the default port; adjust the URL if needed.
@@ -93,6 +104,8 @@ curl -s "http://127.0.0.1:8000/usage-summary"
 | `app/database.py` | `sqlite3` + `init_db()` |
 | `app/models.py` | Pydantic request/response models |
 | `app/utils.py` | Keyword extraction + tag merge |
+| `tests/test_demo.py` | Pytest demo cases (temp DB) |
+| `MANUAL_TESTS.md` | Copy-paste curl walkthrough |
 
 ## Design answers
 
